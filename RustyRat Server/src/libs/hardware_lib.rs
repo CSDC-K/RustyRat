@@ -1,7 +1,7 @@
 
 
 use hardware_query::{GPUVendor, HardwareInfo};
-pub fn get_hardware() -> String {
+pub fn get_hardware_info() -> String {
     let hw = HardwareInfo::query().unwrap();
 
 
@@ -22,18 +22,21 @@ pub fn get_hardware() -> String {
 
 
     let raw_fingerprint = format!(
-        "cpu_name:{}|
-        cpu_logicores:{}|
-        cpu_basefreq:{}|
-        cpu_pyhscore:{}|
-        ram_channels:{}|
-        ram_eccsupport:{}|
-        ram_banwith:{}|
-        ram_speed:{}|
-        ram_usage:{}|
-        gpu_vendor:{:?}|
-        gpu_modelname:{:?}|
-        gpu_gb:{:?}|",
+        r#"
+        [ < ===== HARDWARE INFO ===== > ]
+        [cpu_name:{}
+        [cpu_logicores:{}
+        [cpu_basefreq:{}
+        [cpu_pyhscore:{}
+        [ram_channels:{}
+        [ram_eccsupport:{}
+        [ram_banwith:{}
+        [ram_speed:{}
+        [ram_usage:{}
+        [gpu_vendor:{:?}
+        [gpu_modelname:{:?}
+        [gpu_gb:{:?}
+        [ < ===== HARDWARE INFO ===== > ]"#,
 
 
         cpu.model_name,
