@@ -30,10 +30,20 @@ pub fn handle_client(stream : TcpStream){
             if DEBUG_MODE{
                 writeDebugInfo(&format!("Received: {}", String::from_utf8_lossy(&buffer[..recved_bytes])));
             }
+
             
             let command = String::from_utf8_lossy(&buffer[..recved_bytes]).trim().to_string();
-            let response = command_lib::hook_to_command(&command);
-            func_write(write_handle.clone(), response);
+            if let Some(rest) = command.strip_prefix("/copy_file ") {
+                let file_bytes = command_lib::_DIRECTFUNC_COPY_FILE(rest);
+                func_write(write_handle.clone(), String::new(), true, Some(file_bytes));
+            } else {
+                let response = command_lib::hook_to_command(&command);
+                func_write(write_handle.clone(), "".to_string(), false, None);
+                func_write(write_handle.clone(), response, false, None);
+            }
+
+            
+
             
         }
     });
@@ -46,24 +56,57 @@ pub fn handle_client(stream : TcpStream){
 }
 
 
-fn func_write(write_clone: Arc<Mutex<TcpStream>>, content_of_msg: String) { 
+fn func_write(write_clone: Arc<Mutex<TcpStream>>, content_of_msg: String, byte_send: bool, file_bytes: Option<Vec<u8>>) { 
     let mut stream = write_clone.lock().unwrap();
-    let msg = if content_of_msg.ends_with('\n') {
-        content_of_msg
-    } else {
-        format!("{}\n", content_of_msg)
-    };
-    
-    match stream.write_all(msg.as_bytes()) {
-        Ok(_) => {
-            if let Err(e) = stream.flush() {
-                if DEBUG_MODE {eprintln!("Error flushing stream: {}", e); }
-            } else {
-                if DEBUG_MODE {println!("Message sent: {}", msg.trim()); }
+
+    if byte_send {
+        // Send raw file bytes
+        if let Some(bytes) = file_bytes {
+            // First send the file size so client knows how many bytes to expect
+            let size = bytes.len() as u64;
+            match stream.write_all(&size.to_be_bytes()) {
+                Ok(_) => {
+                    if DEBUG_MODE { println!("Sent file size: {} bytes", size); }
+                }
+                Err(e) => {
+                    if DEBUG_MODE { eprintln!("Error sending file size: {}", e); }
+                    return;
+                }
+            }
+
+            // Then send the actual file bytes
+            match stream.write_all(&bytes) {
+                Ok(_) => {
+                    if let Err(e) = stream.flush() {
+                        if DEBUG_MODE { eprintln!("Error flushing stream: {}", e); }
+                    } else {
+                        if DEBUG_MODE { println!("File bytes sent: {} bytes", bytes.len()); }
+                    }
+                }
+                Err(e) => {
+                    if DEBUG_MODE { eprintln!("Error writing file bytes to client: {}", e); }
+                }
             }
         }
-        Err(e) => {
-            if DEBUG_MODE {eprintln!("Error writing to client: {}", e); }
+    } else {
+        // Send text message
+        let msg = if content_of_msg.ends_with('\n') {
+            content_of_msg
+        } else {
+            format!("{}\n", content_of_msg)
+        };
+        
+        match stream.write_all(msg.as_bytes()) {
+            Ok(_) => {
+                if let Err(e) = stream.flush() {
+                    if DEBUG_MODE { eprintln!("Error flushing stream: {}", e); }
+                } else {
+                    if DEBUG_MODE { println!("Message sent: {}", msg.trim()); }
+                }
+            }
+            Err(e) => {
+                if DEBUG_MODE { eprintln!("Error writing to client: {}", e); }
+            }
         }
     }
 }
