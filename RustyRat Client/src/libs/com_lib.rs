@@ -1,6 +1,7 @@
-use std::net::{TcpStream, TcpListener};
+use std::net::TcpStream;
 use std::io::{Read, Write, BufReader, BufRead};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::io;
 use std::fs::File;
@@ -45,20 +46,52 @@ pub fn receive_file(stream: &mut TcpStream, save_path: &str) -> Result<(), Strin
     Ok(())
 }
 
+// Flag to pause reading during file transfer
+static RECEIVING_FILE: AtomicBool = AtomicBool::new(false);
+
 pub fn start_communication(stream : TcpStream) {
-    // Placeholder for communication logic
-    let stream = Arc::new(stream);
-    let write_thread_handle = Arc::clone(&stream);
-    let read_thread_handle = Arc::clone(&stream);
+    // Use Mutex to protect stream access
+    let stream = Arc::new(Mutex::new(stream));
+    let write_stream = Arc::clone(&stream);
+    let read_stream = Arc::clone(&stream);
+    
     writeDebugInfo("Communication started");
     
     // Reading Handle Thread
     thread::spawn(move || {
-        let reader = BufReader::new(&*read_thread_handle);
-        for line in reader.lines() {
-            match line {
-                Ok(msg) => println!("Received: {}", msg),
-                Err(_) => break,
+        // Get a clone of the stream for reading
+        let read_clone = {
+            let guard = read_stream.lock().unwrap();
+            guard.try_clone().expect("Failed to clone stream for reading")
+        };
+        
+        // Set read timeout so we can periodically check the flag
+        let _ = read_clone.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+        
+        // Use a persistent BufReader to not lose buffered data
+        let mut reader = BufReader::new(read_clone);
+        
+        loop {
+            // Skip reading while file is being received
+            if RECEIVING_FILE.load(Ordering::SeqCst) {
+                thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
+            
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break, // Connection closed
+                Ok(_) => {
+                    if !line.trim().is_empty() && !RECEIVING_FILE.load(Ordering::SeqCst) {
+                        println!("Received: {}", line.trim());
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || 
+                              e.kind() == std::io::ErrorKind::TimedOut => {
+                    // Timeout, continue loop to check flag
+                    continue;
+                }
+                Err(_) => continue,
             }
         }
     });
@@ -73,9 +106,6 @@ pub fn start_communication(stream : TcpStream) {
             io::stdin().read_line(&mut buffer).expect("Error at reading from stdin");
             buffer = buffer.trim().to_string();
             
-            let mut thread_guard = write_thread_handle.try_clone().expect("Error at writing thread handle");
-            thread_guard.write_all(buffer.as_bytes()).expect("Error at writing thread");
-            
             // Check if copyfile command - format: /copyfile <remote_path>
             if buffer.starts_with("/copyfile ") {
                 let parts: Vec<&str> = buffer.splitn(2, ' ').collect();
@@ -85,14 +115,36 @@ pub fn start_communication(stream : TcpStream) {
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("downloaded_file");
+                    
+                    // Pause reading thread
+                    RECEIVING_FILE.store(true, Ordering::SeqCst);
+                    thread::sleep(std::time::Duration::from_millis(200));
+                    
+                    // Lock stream for exclusive file transfer
+                    let mut stream_guard = write_stream.lock().unwrap();
+                    
+                    // Send command
+                    stream_guard.write_all(buffer.as_bytes()).expect("Error sending command");
+                    stream_guard.flush().expect("Error flushing");
+                    
                     println!("Starting file receive...");
-                    match receive_file(&mut thread_guard, file_name) {
+                    match receive_file(&mut stream_guard, file_name) {
                         Ok(_) => println!("File copied successfully!"),
                         Err(e) => eprintln!("Error copying file: {}", e),
                     }
+                    
+                    drop(stream_guard);
+                    
+                    // Resume reading thread
+                    RECEIVING_FILE.store(false, Ordering::SeqCst);
                 } else {
                     eprintln!("Usage: /copyfile <remote_path>");
                 }
+            } else {
+                // Normal message - just send it
+                let mut stream_guard = write_stream.lock().unwrap();
+                stream_guard.write_all(buffer.as_bytes()).expect("Error at writing");
+                stream_guard.flush().expect("Error flushing");
             }
         }
     });
@@ -100,6 +152,4 @@ pub fn start_communication(stream : TcpStream) {
     loop {
         thread::park();
     }
-
-
 }
