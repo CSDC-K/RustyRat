@@ -1,10 +1,10 @@
 [package]
-name = "RustyRat-Client"
+name = "LIVE_SERVER_LIB"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-chrono = "0.4.42"
+egui = "0.33.3"
 image = "0.25.9"
 scrap = "0.5.0"
-
+lz4_flex = "0.11"

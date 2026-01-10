@@ -44,8 +44,6 @@ pub fn handle_client(stream : TcpStream){
             }
 
             
-
-            
         }
     });
 
